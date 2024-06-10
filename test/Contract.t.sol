@@ -2,11 +2,11 @@
 pragma solidity ^0.8.13;
 
 import "forge-std/Test.sol";
+import "../src/Monsterx.sol";
 
 contract ContractTest is Test {
-    function setUp() public {}
-
-    function testExample() public {
-        assertTrue(true);
+    Monsterx monsterx;
+    address testAddr = makeAddr("Test");
+    function setUp() public {
     }
 }
