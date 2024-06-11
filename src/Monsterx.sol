@@ -284,7 +284,6 @@ contract Monsterx is IERC721Receiver, ERC721, ReentrancyGuard, Ownable {
        
             delete idToPaymentSplit[_tokenId];    
         }
-
     }
 
     function requestCancellation(uint256 _tokenId, string memory description) external nonReentrant {
