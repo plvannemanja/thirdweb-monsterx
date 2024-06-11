@@ -167,7 +167,7 @@ contract Monsterx is IERC721Receiver, ERC721, ReentrancyGuard, Ownable {
     }
 
     function listAsset(string memory _uri, uint256 price,
-     RoyaltyDetails memory royalty, PaymentSplit[] memory _paymentSplit) external nonReentrant{ 
+     RoyaltyDetails memory royalty, PaymentSplit[] memory _paymentSplit) external{ 
         require(isCurator[msg.sender] == true, "Only Curators can mint");
         uint256 _tokenId = tokenizeAsset(_uri);
         idToSale[_tokenId] = SaleDetails(
@@ -472,6 +472,20 @@ contract Monsterx is IERC721Receiver, ERC721, ReentrancyGuard, Ownable {
         return(_allBids);
     }
   
+    function getURI(uint256 _tokenId) external view returns (string memory) {
+        require(_exists(_tokenId), "Nonexistent token");
+        return uri[_tokenId];
+    }
+    function getSaleDetail(uint256 _tokenId) external view returns(SaleDetails memory) {
+        require(_exists(_tokenId), "Nonexistent token");
+        return idToSale[_tokenId];
+    }
+
+    function getBidDetail(uint256 _tokenId) external view returns(BidDetails memory) {
+        require(_exists(_tokenId), "Nonexistent token");
+        return idToBid[_tokenId];
+    }
+
     function updateUri(uint256 _tokenId, string memory _uri) external nonReentrant {
         require(_exists(_tokenId), "Nonexistent token");
         require(isAdmin[msg.sender], "Access Denied");
