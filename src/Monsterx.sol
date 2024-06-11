@@ -157,7 +157,7 @@ contract Monsterx is IERC721Receiver, ERC721, ReentrancyGuard, Ownable {
 
     event NftBurned(address owner, uint256 tokenId);
 
-    function tokenizeAsset(string memory _uri) public nonReentrant returns(uint256 tokenId) {
+    function tokenizeAsset(string memory _uri) public returns(uint256 tokenId) {
         tokenCounter.increment();
         uint256 _tokenId = tokenCounter.current();
         _mint(address(this), _tokenId);
@@ -167,7 +167,7 @@ contract Monsterx is IERC721Receiver, ERC721, ReentrancyGuard, Ownable {
     }
 
     function listAsset(string memory _uri, uint256 price,
-     RoyaltyDetails memory royalty, PaymentSplit[] memory _paymentSplit) external{ 
+     RoyaltyDetails memory royalty, PaymentSplit[] memory _paymentSplit) nonReentrant external{ 
         require(isCurator[msg.sender] == true, "Only Curators can mint");
         uint256 _tokenId = tokenizeAsset(_uri);
         idToSale[_tokenId] = SaleDetails(
@@ -214,7 +214,6 @@ contract Monsterx is IERC721Receiver, ERC721, ReentrancyGuard, Ownable {
         refundOtherOffers(_tokenId, 0);
         emit EscrowAdded(idToSale[_tokenId].seller, msg.value);
         emit AssetPurchased(_tokenId, msg.sender, msg.value);
-
     }
 
     function purchaseAssetUnmited(string memory _uri, address seller, RoyaltyDetails memory royalty, PaymentSplit[] memory _paymentSplit) external payable nonReentrant{
@@ -250,7 +249,6 @@ contract Monsterx is IERC721Receiver, ERC721, ReentrancyGuard, Ownable {
         idToSale[_tokenId].description = "The Asset was delivered and Escrow was released";
         fundDistribution(_tokenId);
         safeTransferFrom(address(this), idToSale[_tokenId].buyer, _tokenId);
-        
     }
 
     function fundDistribution(uint256 _tokenId) private{
@@ -340,7 +338,7 @@ contract Monsterx is IERC721Receiver, ERC721, ReentrancyGuard, Ownable {
         emit DisputeReported(_tokenId, description);
     }
 
-    function resolveDispute(uint256 _tokenId, bool _releaseEscrow, string memory description) external nonReentrant {
+    function resolveDispute(uint256 _tokenId, bool _releaseEscrow, string memory description) external {
         require(_exists(_tokenId), "Nonexistent token");
         require(isAdmin[msg.sender] = true,"Only admin can cancel");
         require(idToSale[_tokenId].status == uint256(SaleStatus.Dispute) ||

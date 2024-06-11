@@ -57,9 +57,44 @@ contract ContractTest is Test, AddressToString {
         assertEq(monsterx.getSaleDetail(tokenId).price, price);
     }
 
-    function testPurchaseAsset() public {
+    function testPurchaseAssetShouldBeRevert() public {
         vm.expectRevert("Sale is not live");
         monsterx.purchaseAsset{value: 100}(testToken);
+    }
+
+    function testPurchaseAssets() public {
+        string memory uri = "ipfs://example-listing-uri";
+        uint256 price = 100;
+        Monsterx.RoyaltyDetails memory royalty = Monsterx.RoyaltyDetails({royaltyWallet: address(0x123), royaltyPercentage: 10});
+        Monsterx.PaymentSplit[] memory paymentSplit = new Monsterx.PaymentSplit[](1);
+        paymentSplit[0] = Monsterx.PaymentSplit({paymentWallet: address(0x456), paymentPercentage: 90});
+
+        monsterx.listAsset(uri, price, royalty, paymentSplit);
+        uint256 tokenId = 2;
+        assertEq(monsterx.getSaleDetail(tokenId).price, price);
+
+
+        monsterx.purchaseAsset{value: 100}(tokenId);
+        Monsterx.SaleDetails memory _detail = monsterx.getSaleDetail(tokenId);
+    }
+
+    function testPurchaseAssetUnminted() public {
+        // Setup: Define parameters for the purchase
+        string memory uri = "ipfs://example.com/asset.json"; // Example URI
+        Monsterx.RoyaltyDetails memory royalty = Monsterx.RoyaltyDetails({royaltyWallet: address(0x123), royaltyPercentage: 10});
+        Monsterx.PaymentSplit[] memory paymentSplit = new Monsterx.PaymentSplit[](1);
+        paymentSplit[0] = Monsterx.PaymentSplit({paymentWallet: address(0x456), paymentPercentage: 90});
+
+        // Simulate the balance of the mock address
+        address someRandomUser = vm.addr(1);
+
+        // Execute the function
+        vm.startPrank(someRandomUser); // Simulate the seller initiating the purchase
+        vm.deal(someRandomUser, 1 ether);
+        monsterx.purchaseAssetUnmited{value: 100}(uri, testAddr, royalty, paymentSplit);
+        vm.stopPrank();
+
+        // Assertions
     }
 
     function testPlaceBid() public {
