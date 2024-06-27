@@ -8,11 +8,14 @@ import "@openzeppelin/contracts/token/ERC721/ERC721.sol";
 import "@openzeppelin/contracts/security/ReentrancyGuard.sol";
 import "@openzeppelin/contracts/access/Ownable.sol";
 import "@openzeppelin/contracts/utils/Counters.sol";
+import "@openzeppelin/contracts/utils/math/SafeMath.sol";
+import "@chainlink/contracts/src/v0.8/shared/interfaces/AggregatorV3Interface.sol";
 //  ==========  Internal imports    ==========
 
 contract Monsterx is IERC721Receiver, ERC721, ReentrancyGuard, Ownable {
 
     using Counters for Counters.Counter;
+    using SafeMath for uint256;
 
     Counters.Counter public tokenCounter;
     Counters.Counter public bidCounter;
@@ -26,11 +29,14 @@ contract Monsterx is IERC721Receiver, ERC721, ReentrancyGuard, Ownable {
     uint256 public fee = 100; //1%
     uint256 public escrowReleaseTime;
 
+    // oracle
+    AggregatorV3Interface internal priceFeed;
 
     constructor() ERC721("MonsterX", "MonsterX"){
        isAdmin[msg.sender] = true;
        treasury = msg.sender;
        isCurator[msg.sender] = true;
+       priceFeed = AggregatorV3Interface(0xAB594600376Ec9fD91F8e885dADF0CE036862dE0);
     }
 
     //struct for each market item
@@ -157,6 +163,39 @@ contract Monsterx is IERC721Receiver, ERC721, ReentrancyGuard, Ownable {
 
     event NftBurned(address owner, uint256 tokenId);
 
+    // oracle
+    function getLatestMaticPrice() public view returns (int) {
+        (
+            uint80 roundID,
+            int price,
+            uint startedAt,
+            uint timeStamp,
+            uint80 answeredInRound
+        ) = priceFeed.latestRoundData();
+        require(price > 0, "Price should be greater than 0");
+        return price;
+    }
+
+    function _getMaticAmount(uint256 usdPrice) private view returns (uint256) {
+        (
+            uint80 roundID,
+            int price,
+            uint startedAt,
+            uint timeStamp,
+            uint80 answeredInRound
+        ) = priceFeed.latestRoundData();
+        require(price > 0, "Matic Rate should be greater than 0");
+
+        // chainlink decimal is 8
+        // usd decimal is 2
+        // matic decimal is 2
+        return (uint256(usdPrice * 1e8)) / (uint256(price));
+    }
+
+    function getMaticAmount(uint256 usdPrice) public view returns (uint256) {
+        return _getMaticAmount(usdPrice);
+    }
+
     function tokenizeAsset(string memory _uri) public returns(uint256 tokenId) {
         tokenCounter.increment();
         uint256 _tokenId = tokenCounter.current();
@@ -187,10 +226,10 @@ contract Monsterx is IERC721Receiver, ERC721, ReentrancyGuard, Ownable {
 
     } 
    
-    function reSaleAsset(uint256 _tokenId, uint256 price) external nonReentrant{
+    function reSaleAsset(uint256 _tokenId, uint256 price) external {
         require(_exists(_tokenId), "Nonexistent token");
-        require(IERC721(address(this)).ownerOf(_tokenId) == msg.sender,"NFT not owned");
-        IERC721(address(this)).safeTransferFrom(msg.sender, address(this), _tokenId);
+        require(ownerOf(_tokenId) == msg.sender,"NFT not owned");
+        safeTransferFrom(msg.sender, address(this), _tokenId);
         idToSale[_tokenId] = SaleDetails(
         _tokenId,
         msg.sender,
@@ -248,7 +287,9 @@ contract Monsterx is IERC721Receiver, ERC721, ReentrancyGuard, Ownable {
         idToSale[_tokenId].status = uint256(SaleStatus.Sold);
         idToSale[_tokenId].description = "The Asset was delivered and Escrow was released";
         fundDistribution(_tokenId);
-        safeTransferFrom(address(this), idToSale[_tokenId].buyer, _tokenId);
+        IERC721(address(this)).safeTransferFrom(address(this), idToSale[_tokenId].buyer, _tokenId);
+
+        // safeTransferFrom(address(this), idToSale[_tokenId].buyer, _tokenId);
     }
 
     function fundDistribution(uint256 _tokenId) private{
@@ -296,7 +337,7 @@ contract Monsterx is IERC721Receiver, ERC721, ReentrancyGuard, Ownable {
         require(_exists(_tokenId), "Nonexistent token");
         require(idToSale[_tokenId].status == uint256(SaleStatus.Active), "Sale is not live");
         require(msg.sender == idToSale[_tokenId].seller, "Only seller can end Sale");
-        safeTransferFrom(address(this), idToSale[_tokenId].seller, _tokenId);
+        IERC721(address(this)).safeTransferFrom(address(this), idToSale[_tokenId].seller, _tokenId);
         idToSale[_tokenId] = SaleDetails(
         _tokenId,
         idToSale[_tokenId].seller,
@@ -314,7 +355,7 @@ contract Monsterx is IERC721Receiver, ERC721, ReentrancyGuard, Ownable {
         require(isAdmin[msg.sender] = true,"Only admin can cancel");
         payable(idToSale[_tokenId].buyer).transfer(idToSale[_tokenId].price);
         sellerEscrowAmount[idToSale[_tokenId].seller] -= idToSale[_tokenId].price;
-        safeTransferFrom(address(this), idToSale[_tokenId].seller, _tokenId);
+        IERC721(address(this)).safeTransferFrom(address(this), idToSale[_tokenId].seller, _tokenId);
         idToSale[_tokenId] = SaleDetails(
         _tokenId,
         idToSale[_tokenId].seller,
@@ -401,7 +442,7 @@ contract Monsterx is IERC721Receiver, ERC721, ReentrancyGuard, Ownable {
         require(idToSale[_tokenId].status == uint256(SaleStatus.NotForSale) || idToSale[_tokenId].status == uint256(SaleStatus.Active) || idToSale[_tokenId].status == uint256(SaleStatus.Sold)
         || idToSale[_tokenId].status == uint256(SaleStatus.Cancelled), "Order Purchased");
         require(msg.sender == idToSale[_tokenId].seller || msg.sender == idToSale[_tokenId].buyer, "Only seller or buyer can accept offers");
-        if(ownerOf(_tokenId) != address(this)){
+        if(IERC721(address(this)).ownerOf(_tokenId) != address(this)){
             IERC721(address(this)).safeTransferFrom(msg.sender, address(this), _tokenId);
         }
         idToSale[_tokenId].buyer = idToBid[_bidId].bidder;
@@ -458,7 +499,7 @@ contract Monsterx is IERC721Receiver, ERC721, ReentrancyGuard, Ownable {
         require(_exists(_tokenId), "Nonexistent token");
         require(idToSale[_tokenId].status == uint256(SaleStatus.NotForSale) || idToSale[_tokenId].status == uint256(SaleStatus.Active) || idToSale[_tokenId].status == uint256(SaleStatus.Sold)
         || idToSale[_tokenId].status == uint256(SaleStatus.Cancelled), "NFT Purchased");
-        require(ownerOf(_tokenId) == msg.sender || idToSale[_tokenId].seller == msg.sender, "Access Denied" );
+        require(IERC721(address(this)).ownerOf(_tokenId) == msg.sender || idToSale[_tokenId].seller == msg.sender, "Access Denied" );
         _burn(_tokenId);
         emit NftBurned(msg.sender, _tokenId);
     }
@@ -504,18 +545,18 @@ contract Monsterx is IERC721Receiver, ERC721, ReentrancyGuard, Ownable {
     function withdrawNft(uint256 _tokenId) external nonReentrant {
         require(_exists(_tokenId), "Nonexistent token");
         require(isAdmin[msg.sender], "Access Denied");
-        safeTransferFrom(address(this), msg.sender, _tokenId);
+        IERC721(address(this)).safeTransferFrom(address(this), msg.sender, _tokenId);
     }
 
     function withdrawTokens(IERC20 token, address wallet) external nonReentrant onlyOwner {
-		uint256 balanceOfContract = token.balanceOf(address(this));
-		token.transfer(wallet, balanceOfContract);
-	}
+        uint256 balanceOfContract = token.balanceOf(address(this));
+        token.transfer(wallet, balanceOfContract);
+    }
 
-	function withdrawFunds(address wallet) external nonReentrant onlyOwner {
-		uint256 balanceOfContract = address(this).balance;
-		payable(wallet).transfer(balanceOfContract);
-	}
+    function withdrawFunds(address wallet) external nonReentrant onlyOwner {
+        uint256 balanceOfContract = address(this).balance;
+        payable(wallet).transfer(balanceOfContract);
+    }
 
     function setAdmin(address[] memory admins, bool _isAdmin) external nonReentrant onlyOwner {
         for(uint256 i=0;i<admins.length;i++){

@@ -5,6 +5,7 @@ libs = ['lib']
 remappings = [
     '@thirdweb-dev/=node_modules/@thirdweb-dev/',
     '@openzeppelin/=node_modules/@openzeppelin/',
+    '@chainlink/=node_modules/@chainlink/',
 ]
 [profile.default]
 src = "src"

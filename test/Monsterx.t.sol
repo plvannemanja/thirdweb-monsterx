@@ -97,6 +97,28 @@ contract ContractTest is Test, AddressToString {
         // Assertions
     }
 
+    function testReleaseEscrow() public {
+        string memory uri = "ipfs://example-listing-uri";
+        uint256 price = 100;
+        Monsterx.RoyaltyDetails memory royalty = Monsterx.RoyaltyDetails({royaltyWallet: address(0x123), royaltyPercentage: 10});
+        Monsterx.PaymentSplit[] memory paymentSplit = new Monsterx.PaymentSplit[](1);
+        paymentSplit[0] = Monsterx.PaymentSplit({paymentWallet: address(0x456), paymentPercentage: 90});
+
+        monsterx.listAsset(uri, price, royalty, paymentSplit);
+        uint256 tokenId = 2;
+        assertEq(monsterx.getSaleDetail(tokenId).price, price);
+
+        address someRandomUser = vm.addr(1);
+
+        // Execute the function
+        vm.startPrank(someRandomUser); // Simulate the seller initiating the purchase
+        vm.deal(someRandomUser, 10 ether);
+        monsterx.purchaseAsset{value: 100}(tokenId);
+        monsterx.releaseEscrow(tokenId);
+        monsterx.reSaleAsset(tokenId, 100);
+        vm.stopPrank();
+    }
+
     function testPlaceBid() public {
         monsterx.placeBid{value: 150}(testToken);
         assertEq(monsterx.getBidDetail(testToken).bidder, address(this));
