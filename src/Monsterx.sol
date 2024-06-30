@@ -45,6 +45,7 @@ contract Monsterx is IERC721Receiver, ERC721, ReentrancyGuard, Ownable {
         address seller;
         address buyer;
         uint256 price;
+        uint256 maticPrice;
         uint256 status;
         uint256 shipmentTime;
         string description;
@@ -163,37 +164,43 @@ contract Monsterx is IERC721Receiver, ERC721, ReentrancyGuard, Ownable {
 
     event NftBurned(address owner, uint256 tokenId);
 
+    event Debug(uint256 value);
+
     // oracle
     function getLatestMaticPrice() public view returns (int) {
-        (
-            uint80 roundID,
-            int price,
-            uint startedAt,
-            uint timeStamp,
-            uint80 answeredInRound
-        ) = priceFeed.latestRoundData();
+        (, int price, , ,) = priceFeed.latestRoundData();
         require(price > 0, "Price should be greater than 0");
         return price;
     }
 
-    function _getMaticAmount(uint256 usdPrice) private view returns (uint256) {
-        (
-            uint80 roundID,
-            int price,
-            uint startedAt,
-            uint timeStamp,
-            uint80 answeredInRound
-        ) = priceFeed.latestRoundData();
+    function _getMaticAmount(uint256 usdAmount) private view returns (uint256) {
+        (, int price, , ,) = priceFeed.latestRoundData();
         require(price > 0, "Matic Rate should be greater than 0");
 
         // chainlink decimal is 8
-        // usd decimal is 2
-        // matic decimal is 2
-        return (uint256(usdPrice * 1e8)) / (uint256(price));
+        // usd decimal is 18
+        // matic decimal is 18
+        return (uint256(usdAmount * 1e8)) / (uint256(price));
     }
 
-    function getMaticAmount(uint256 usdPrice) public view returns (uint256) {
-        return _getMaticAmount(usdPrice);
+    function _checkMaticAmount(uint256 usdAmount, uint256 maticAmount) private view returns (bool) {
+        uint256 requiredMaticAmount = _getMaticAmount(usdAmount);
+
+        require(maticAmount >= requiredMaticAmount, "Insufficient MATIC sent");
+        return true;
+    }
+
+    function getMaticAmount(uint256 usdAmount) public view returns (uint256) {
+        return _getMaticAmount(usdAmount);
+    }
+
+    function _checkPaymentSplit(PaymentSplit[] memory _paymentSplit) private pure {
+        // check percentage
+        uint256 splitPercentage = 0;
+        for(uint256 i =0; i < _paymentSplit.length ; i++){
+            splitPercentage += _paymentSplit[i].paymentPercentage;
+        }
+        require(splitPercentage < 80 * 100, "Split percentage should be less than 80%.");
     }
 
     function tokenizeAsset(string memory _uri) public returns(uint256 tokenId) {
@@ -208,12 +215,16 @@ contract Monsterx is IERC721Receiver, ERC721, ReentrancyGuard, Ownable {
     function listAsset(string memory _uri, uint256 price,
      RoyaltyDetails memory royalty, PaymentSplit[] memory _paymentSplit) nonReentrant external{ 
         require(isCurator[msg.sender] == true, "Only Curators can mint");
+        // check percentage
+        _checkPaymentSplit(_paymentSplit);
+
         uint256 _tokenId = tokenizeAsset(_uri);
         idToSale[_tokenId] = SaleDetails(
         _tokenId,
         msg.sender,
         address(0),
         price, 
+        0,
         uint256(SaleStatus.Active),
         0,
         ""
@@ -223,8 +234,7 @@ contract Monsterx is IERC721Receiver, ERC721, ReentrancyGuard, Ownable {
             idToPaymentSplit[_tokenId].push(_paymentSplit[i]);
         } 
         emit AssetListed(_tokenId, msg.sender, price);
-
-    } 
+    }
    
     function reSaleAsset(uint256 _tokenId, uint256 price) external {
         require(_exists(_tokenId), "Nonexistent token");
@@ -235,6 +245,7 @@ contract Monsterx is IERC721Receiver, ERC721, ReentrancyGuard, Ownable {
         msg.sender,
         address(0),
         price,
+        0,
         uint256(SaleStatus.Active),
         block.timestamp,
         ""
@@ -245,8 +256,10 @@ contract Monsterx is IERC721Receiver, ERC721, ReentrancyGuard, Ownable {
     function purchaseAsset(uint256 _tokenId) external payable nonReentrant{
         require(_exists(_tokenId), "Nonexistent token");
         require(idToSale[_tokenId].status == uint256(SaleStatus.Active), "Sale is not live");
-        require(msg.value == idToSale[_tokenId].price, " Incorrect Amount");
+        require(_checkMaticAmount(idToSale[_tokenId].price, msg.value), "Insufficient amount");
+
         idToSale[_tokenId].buyer = msg.sender;
+        idToSale[_tokenId].maticPrice = msg.value;
         idToSale[_tokenId].shipmentTime = block.timestamp;
         idToSale[_tokenId].status = uint256(SaleStatus.Ordered);
         sellerEscrowAmount[idToSale[_tokenId].seller] += msg.value;
@@ -255,12 +268,17 @@ contract Monsterx is IERC721Receiver, ERC721, ReentrancyGuard, Ownable {
         emit AssetPurchased(_tokenId, msg.sender, msg.value);
     }
 
-    function purchaseAssetUnmited(string memory _uri, address seller, RoyaltyDetails memory royalty, PaymentSplit[] memory _paymentSplit) external payable nonReentrant{
+    function purchaseAssetUnmited(string memory _uri, address seller, uint256 price, RoyaltyDetails memory royalty, PaymentSplit[] memory _paymentSplit) external payable nonReentrant{
+        require(price > 0, "USD price should be greater than 0");
+        require(_checkMaticAmount(price, msg.value), "Insufficient amount");
+        _checkPaymentSplit(_paymentSplit);
+
         uint256 _tokenId = tokenizeAsset(_uri);
         idToSale[_tokenId] = SaleDetails(
         _tokenId,
         seller,
         msg.sender,
+        price,
         msg.value, 
         uint256(SaleStatus.Active),
         block.timestamp,
@@ -277,9 +295,7 @@ contract Monsterx is IERC721Receiver, ERC721, ReentrancyGuard, Ownable {
         refundOtherOffers(_tokenId, 0);
         emit EscrowAdded(idToSale[_tokenId].seller, msg.value);
         emit AssetPurchased(_tokenId, msg.sender, msg.value);
-
     }
-
 
     function releaseEscrow(uint256 _tokenId) public nonReentrant {
         require(_exists(_tokenId), "Nonexistent token");
@@ -288,38 +304,41 @@ contract Monsterx is IERC721Receiver, ERC721, ReentrancyGuard, Ownable {
         idToSale[_tokenId].description = "The Asset was delivered and Escrow was released";
         fundDistribution(_tokenId);
         IERC721(address(this)).safeTransferFrom(address(this), idToSale[_tokenId].buyer, _tokenId);
-
-        // safeTransferFrom(address(this), idToSale[_tokenId].buyer, _tokenId);
     }
 
-    function fundDistribution(uint256 _tokenId) private{
-        uint256 _fee = (idToSale[_tokenId].price * fee)/10000;
+    function fundDistribution(uint256 _tokenId) private {
+        uint256 _fee = (idToSale[_tokenId].maticPrice * fee)/10000;
         payable(treasury).transfer(_fee);
         emit MarketplaceFee(_tokenId, _fee, idToSale[_tokenId].buyer);
 
-        uint256 _royalty = (idToRoyalty[_tokenId].royaltyPercentage * (idToSale[_tokenId].price - _fee))/10000;
-        payable(idToRoyalty[_tokenId].royaltyWallet).transfer(_royalty);
-        emit RoyaltiesReceived(_tokenId, idToRoyalty[_tokenId].royaltyWallet, _royalty);
+        uint256 _royalty = 0;
+        if(idToRoyalty[_tokenId].royaltyPercentage > 0) {
+            _royalty = (idToRoyalty[_tokenId].royaltyPercentage * (idToSale[_tokenId].maticPrice - _fee))/10000;
+            payable(idToRoyalty[_tokenId].royaltyWallet).transfer(_royalty);
+            emit RoyaltiesReceived(_tokenId, idToRoyalty[_tokenId].royaltyWallet, _royalty);
+        }
 
         uint256 _paymentSplit;
         if(idToPaymentSplit[_tokenId].length >0){
             for(uint256 i =0; i < idToPaymentSplit[_tokenId].length ; i++){
 
-            _paymentSplit += (idToPaymentSplit[_tokenId][i].paymentPercentage *
-            (idToSale[_tokenId].price - _fee - _royalty))/10000;
-            
-            payable(idToPaymentSplit[_tokenId][i].paymentWallet).transfer
-            ((idToPaymentSplit[_tokenId][i].paymentPercentage * (idToSale[_tokenId].price - _fee - _royalty))/10000);
+                _paymentSplit += (idToPaymentSplit[_tokenId][i].paymentPercentage *
+                (idToSale[_tokenId].maticPrice - _fee - _royalty))/10000;
+                
+                payable(idToPaymentSplit[_tokenId][i].paymentWallet).transfer
+                ((idToPaymentSplit[_tokenId][i].paymentPercentage * (idToSale[_tokenId].maticPrice - _fee - _royalty))/10000);
 
-            emit PaymentSplitReceived(_tokenId, 
-            (idToPaymentSplit[_tokenId][i].paymentPercentage * (idToSale[_tokenId].price - _fee - _royalty))/10000, 
-            idToPaymentSplit[_tokenId][i].paymentWallet);
-        }
+                emit PaymentSplitReceived(_tokenId, 
+                (idToPaymentSplit[_tokenId][i].paymentPercentage * (idToSale[_tokenId].maticPrice - _fee - _royalty))/10000, 
+                idToPaymentSplit[_tokenId][i].paymentWallet);
+            }
         
-            payable(idToSale[_tokenId].seller).transfer(idToSale[_tokenId].price -(_royalty + _fee + _paymentSplit));
-            sellerEscrowAmount[idToSale[_tokenId].seller] -= idToSale[_tokenId].price;
+            emit Debug(idToSale[_tokenId].maticPrice - (_royalty + _fee + _paymentSplit));
+            payable(idToSale[_tokenId].seller).transfer(idToSale[_tokenId].maticPrice - (_royalty + _fee + _paymentSplit));
+            emit Debug(1);
+            sellerEscrowAmount[idToSale[_tokenId].seller] -= idToSale[_tokenId].maticPrice;
             emit EscrowReleased(_tokenId, idToSale[_tokenId].seller,
-            idToSale[_tokenId].price -(_royalty + _fee + _paymentSplit));
+            idToSale[_tokenId].maticPrice -(_royalty + _fee + _paymentSplit));
        
             delete idToPaymentSplit[_tokenId];    
         }
@@ -343,6 +362,7 @@ contract Monsterx is IERC721Receiver, ERC721, ReentrancyGuard, Ownable {
         idToSale[_tokenId].seller,
         address(0),
         0,
+        0,
         uint256(SaleStatus.Cancelled),
         0,
         ""
@@ -353,13 +373,14 @@ contract Monsterx is IERC721Receiver, ERC721, ReentrancyGuard, Ownable {
     function cancelOrder(uint256 _tokenId, string memory description) public nonReentrant {
         require(_exists(_tokenId), "Nonexistent token");
         require(isAdmin[msg.sender] = true,"Only admin can cancel");
-        payable(idToSale[_tokenId].buyer).transfer(idToSale[_tokenId].price);
-        sellerEscrowAmount[idToSale[_tokenId].seller] -= idToSale[_tokenId].price;
+        payable(idToSale[_tokenId].buyer).transfer(idToSale[_tokenId].maticPrice);
+        sellerEscrowAmount[idToSale[_tokenId].seller] -= idToSale[_tokenId].maticPrice;
         IERC721(address(this)).safeTransferFrom(address(this), idToSale[_tokenId].seller, _tokenId);
         idToSale[_tokenId] = SaleDetails(
         _tokenId,
         idToSale[_tokenId].seller,
         address(0),
+        0,
         0,
         uint256(SaleStatus.Cancelled),
         0,
@@ -391,7 +412,6 @@ contract Monsterx is IERC721Receiver, ERC721, ReentrancyGuard, Ownable {
             cancelOrder(_tokenId, description);
         }
         emit DisputeResolved(_tokenId, idToSale[_tokenId].status);
-
     }
 
     function placeBid(uint256 _tokenId) external payable nonReentrant {
@@ -410,14 +430,16 @@ contract Monsterx is IERC721Receiver, ERC721, ReentrancyGuard, Ownable {
     } 
 
     function placeBidUnminted(string memory _uri, address seller, uint256 price, RoyaltyDetails memory royalty, PaymentSplit[] memory _paymentSplit) external payable nonReentrant {
+        require(_checkMaticAmount(price, msg.value), "Insufficient matic amount");
         uint256 _tokenId = tokenizeAsset(_uri);
         idToSale[_tokenId] = SaleDetails(
-        _tokenId,
-        seller,
-        address(0),
-        price, 
-        uint256(SaleStatus.Active),
-        0,
+            _tokenId,
+            seller,
+            address(0),
+            price,
+            0,
+            uint256(SaleStatus.Active),
+            0,
         ""
         );
         idToRoyalty[_tokenId] = royalty;
@@ -433,7 +455,6 @@ contract Monsterx is IERC721Receiver, ERC721, ReentrancyGuard, Ownable {
         );
         tokenOffers[_tokenId].push(bidCount);
         emit BidPlaced(_tokenId, bidCount, msg.sender, msg.value);
-
     }  
  
     function acceptBid(uint256 _tokenId, uint256 _bidId) external nonReentrant {
@@ -453,7 +474,6 @@ contract Monsterx is IERC721Receiver, ERC721, ReentrancyGuard, Ownable {
         emit EscrowAdded(idToSale[_tokenId].seller, idToBid[_bidId].bidAmount);
         emit AssetPurchased(_tokenId, idToBid[_bidId].bidder, idToBid[_bidId].bidAmount);
         refundOtherOffers(_tokenId, _bidId);
-
     }   
 
     function refundOtherOffers(uint256 _tokenId, uint256 _bidId) private {
@@ -491,7 +511,6 @@ contract Monsterx is IERC721Receiver, ERC721, ReentrancyGuard, Ownable {
         }     
         else{
             tokenOffers[_tokenId].pop();
-
         }  
     }
 

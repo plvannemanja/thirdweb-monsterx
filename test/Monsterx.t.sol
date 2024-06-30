@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: UNLICENSED
 pragma solidity ^0.8.13;
 
-import "forge-std/console.sol";
 import "forge-std/Test.sol";
+import "forge-std/console.sol";
+// import {console} from "forge-std/Console.sol";
 import "@openzeppelin/contracts/utils/Strings.sol";
 
 import "../src/Monsterx.sol";
@@ -27,25 +28,47 @@ contract AddressToString {
 
 contract ContractTest is Test, AddressToString {
     using Strings for string;
+    uint256 polygonFork;
 
+    string POLYGON_RPC_URL = vm.envString("POLYGON_RPC_URL");
     Monsterx monsterx;
-    address testAddr = makeAddr("Test");
-    address validAddr = makeAddr("Valid");
+    address testAddr = 0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266;
+    address validAddr = 0x70997970C51812dc3A010C7d01b50e0d17dc79C8;
+    address treasuryAddr = 0xa0Ee7A142d267C1f36714E4a8F75612F20a79720;
+    address sellerAddr = 0x14dC79964da2C08b23698B3D3cc7Ca32193d9955;
+    address buyerAddr = 0x23618e81E3f5cdF7f54C3d65f7FBc0aBf5B21E8f;
     uint256 testToken;
     function setUp() public {
         monsterx = new Monsterx();
+        monsterx.setTreasury(treasuryAddr);
         string memory uri = "ipfs://example-token-uri";
         testToken = monsterx.tokenizeAsset(uri);
+        polygonFork = vm.createFork(POLYGON_RPC_URL);
+        vm.selectFork(polygonFork);
+        address[] memory sellers = new address[](1);
+        sellers[0] = sellerAddr;
+        monsterx.setAdmin(sellers, true);
+        monsterx.setCurators(sellers, true);
     }
 
-    function testTokenMinting() public {
+    function test_balance() public view {
+        uint256 testBalance = address(testAddr).balance;
+        console.logUint(testBalance / 1e18);
+    }
+
+    function test_getMaticBalance() public view {
+        int price = monsterx.getLatestMaticPrice();
+        console.logInt(price);
+    }
+
+    function test_tokenMinting() public {
         string memory uri = "ipfs://example-token-uri";
         uint256 tokenId = monsterx.tokenizeAsset(uri);
         console.log(tokenId, uri, monsterx.tokenURI(tokenId));
         assertTrue(uri.equal(monsterx.getURI(tokenId)));
     }
 
-    function testListingAsset() public {
+    function test_listingAsset() public {
         string memory uri = "ipfs://example-listing-uri";
         uint256 price = 100;
         Monsterx.RoyaltyDetails memory royalty = Monsterx.RoyaltyDetails({royaltyWallet: address(0x123), royaltyPercentage: 10});
@@ -55,14 +78,15 @@ contract ContractTest is Test, AddressToString {
         monsterx.listAsset(uri, price, royalty, paymentSplit);
         uint256 tokenId = 2;
         assertEq(monsterx.getSaleDetail(tokenId).price, price);
+        assertEq(monsterx.getSaleDetail(tokenId).maticPrice, 0);
     }
 
-    function testPurchaseAssetShouldBeRevert() public {
+    function test_purchaseAssetShouldBeRevert() public {
         vm.expectRevert("Sale is not live");
         monsterx.purchaseAsset{value: 100}(testToken);
     }
 
-    function testPurchaseAssets() public {
+    function test_purchaseAssets() public {
         string memory uri = "ipfs://example-listing-uri";
         uint256 price = 100;
         Monsterx.RoyaltyDetails memory royalty = Monsterx.RoyaltyDetails({royaltyWallet: address(0x123), royaltyPercentage: 10});
@@ -73,65 +97,92 @@ contract ContractTest is Test, AddressToString {
         uint256 tokenId = 2;
         assertEq(monsterx.getSaleDetail(tokenId).price, price);
 
-
-        monsterx.purchaseAsset{value: 100}(tokenId);
+        uint256 maticAmount = monsterx.getMaticAmount(100);
+        monsterx.purchaseAsset{value: maticAmount}(tokenId);
         Monsterx.SaleDetails memory _detail = monsterx.getSaleDetail(tokenId);
+        assertEq(_detail.maticPrice, maticAmount);
     }
 
-    function testPurchaseAssetUnminted() public {
+    function test_purchaseAssetUnminted() public {
         // Setup: Define parameters for the purchase
         string memory uri = "ipfs://example.com/asset.json"; // Example URI
-        Monsterx.RoyaltyDetails memory royalty = Monsterx.RoyaltyDetails({royaltyWallet: address(0x123), royaltyPercentage: 10});
+        address royaltyAddress = address(0x123);
+        address splitAddress = address(0x456);
+        console.logUint(royaltyAddress.balance);
+        console.logUint(splitAddress.balance);
+
+        Monsterx.RoyaltyDetails memory royalty = Monsterx.RoyaltyDetails({royaltyWallet: royaltyAddress, royaltyPercentage: 10});
         Monsterx.PaymentSplit[] memory paymentSplit = new Monsterx.PaymentSplit[](1);
-        paymentSplit[0] = Monsterx.PaymentSplit({paymentWallet: address(0x456), paymentPercentage: 90});
+        paymentSplit[0] = Monsterx.PaymentSplit({paymentWallet: splitAddress, paymentPercentage: 90});
 
         // Simulate the balance of the mock address
         address someRandomUser = vm.addr(1);
 
         // Execute the function
         vm.startPrank(someRandomUser); // Simulate the seller initiating the purchase
-        vm.deal(someRandomUser, 1 ether);
-        monsterx.purchaseAssetUnmited{value: 100}(uri, testAddr, royalty, paymentSplit);
-        vm.stopPrank();
+        vm.deal(someRandomUser, 100 ether);
 
-        // Assertions
+        uint256 tokenId = 2;
+        uint256 usdAmount = 1e18;
+        uint256 maticAmount = monsterx.getMaticAmount(usdAmount);
+        monsterx.purchaseAssetUnmited{value: maticAmount}(uri, testAddr, usdAmount, royalty, paymentSplit);
+        Monsterx.SaleDetails memory _detail = monsterx.getSaleDetail(tokenId);
+        assertEq(_detail.maticPrice, maticAmount);
+        console.logUint(royaltyAddress.balance);
+        console.logUint(splitAddress.balance);
+        vm.stopPrank();
     }
 
-    function testReleaseEscrow() public {
+    function test_releaseEscrow() public {
         string memory uri = "ipfs://example-listing-uri";
-        uint256 price = 100;
-        Monsterx.RoyaltyDetails memory royalty = Monsterx.RoyaltyDetails({royaltyWallet: address(0x123), royaltyPercentage: 10});
+        uint256 price = 1e18;
+        address royaltyAddress = testAddr;
+        address splitAddress = validAddr;
+        console.log("before release escrow royalty and split address");
+        console.logUint(royaltyAddress.balance);
+        console.logUint(splitAddress.balance);
+        Monsterx.RoyaltyDetails memory royalty = Monsterx.RoyaltyDetails({royaltyWallet: royaltyAddress, royaltyPercentage: 10});
         Monsterx.PaymentSplit[] memory paymentSplit = new Monsterx.PaymentSplit[](1);
-        paymentSplit[0] = Monsterx.PaymentSplit({paymentWallet: address(0x456), paymentPercentage: 90});
+        paymentSplit[0] = Monsterx.PaymentSplit({paymentWallet: splitAddress, paymentPercentage: 90});
 
+        vm.startPrank(sellerAddr);
         monsterx.listAsset(uri, price, royalty, paymentSplit);
         uint256 tokenId = 2;
         assertEq(monsterx.getSaleDetail(tokenId).price, price);
-
-        address someRandomUser = vm.addr(1);
+        vm.stopPrank();
+        address someRandomUser = buyerAddr;
 
         // Execute the function
         vm.startPrank(someRandomUser); // Simulate the seller initiating the purchase
         vm.deal(someRandomUser, 10 ether);
-        monsterx.purchaseAsset{value: 100}(tokenId);
+        uint256 maticAmount = monsterx.getMaticAmount(price);
+        monsterx.purchaseAsset{value: maticAmount}(tokenId);
+
+        // check IdToSale struct
+        Monsterx.SaleDetails memory _detail = monsterx.getSaleDetail(tokenId);
+        console.logAddress(_detail.seller);
+        console.logUint(address(_detail.seller).balance);
         monsterx.releaseEscrow(tokenId);
+        console.log("after release escrow royalty and split address");
+        console.logUint(royaltyAddress.balance);
+        console.logUint(splitAddress.balance);
         monsterx.reSaleAsset(tokenId, 100);
         vm.stopPrank();
     }
 
-    function testPlaceBid() public {
+    function test_placeBid() public {
         monsterx.placeBid{value: 150}(testToken);
         assertEq(monsterx.getBidDetail(testToken).bidder, address(this));
     }
 
-    function testSetAdmin() public {
+    function test_setAdmin() public {
         address[] memory admins = new address[](1);
         admins[0] = address(0x789);
         monsterx.setAdmin(admins, true);
         assertTrue(monsterx.isAdmin(admins[0]));
     }
 
-    function testSetCuratorShouldRevert() public {
+    function test_setCuratorShouldRevert() public {
         vm.startPrank(testAddr);
         vm.expectRevert("Access Denied");
         address[] memory addresses = new address[](1);
@@ -140,7 +191,7 @@ contract ContractTest is Test, AddressToString {
         vm.stopPrank();
     }
 
-    function testSetCuratorShouldBeOK() public {
+    function test_setCuratorShouldBeOK() public {
         address[] memory admins = new address[](1);
         admins[0] = address(testAddr);
         monsterx.setAdmin(admins, true);
